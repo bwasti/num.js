@@ -6,10 +6,6 @@
 
 namespace detail {
 
-template <typename> void type_id() {}
-
-using type_id_t = void (*)();
-
 // from https://stackoverflow.com/a/45365798
 template <typename Callable> union storage {
   storage() {}
