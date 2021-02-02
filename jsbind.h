@@ -58,28 +58,48 @@ NUMERIC_TYPE(double);
 NUMERIC_TYPE(float);
 NUMERIC_TYPE(int);
 
-//template <>
-//v8::Local<v8::Value> new_cast_from<std::vector<float>>(std::vector<float> v, v8::Isolate * isolate) {
-//  auto array = v8::Float32Array::New(v8::ArrayBuffer::New(isolate, v.size() * 4), 0, size);
-//
-//  return v8::Number::New(isolate, v);
-//}
+template <>
+std::vector<float>
+new_cast_to<std::vector<float>>(v8::Local<v8::Value> &&v,
+                                v8::Local<v8::Context> &context) {
+  assert(v->IsFloat32Array());
+  auto array = v8::Float32Array::Cast(*v);
+  auto storage = array->Buffer()->GetBackingStore();
+  auto *data = static_cast<float *>(storage->Data()) +
+               array->ByteOffset() / sizeof(float);
+  std::vector<float> o(data, data + array->Length());
+  return o;
+}
+
+template <>
+v8::Local<v8::Value> new_cast_from<std::vector<float>>(std::vector<float> v,
+                                                       v8::Isolate *isolate) {
+  auto array = v8::Float32Array::New(
+      v8::ArrayBuffer::New(isolate, v.size() * sizeof(float)), 0, v.size());
+  auto storage = array->Buffer()->GetBackingStore();
+  auto *data = static_cast<float *>(storage->Data()) +
+               array->ByteOffset() / sizeof(float);
+  memcpy(data, v.data(), v.size() * sizeof(float));
+  return array;
+}
 
 template <typename T, typename F, typename Out, typename Tup, size_t... index>
-Out call_from_impl(T* obj, F f, const v8::FunctionCallbackInfo<v8::Value> &args,
-                 v8::Local<v8::Context> &context,
-                 std::index_sequence<index...>) {
+Out call_from_impl(T *obj, F f, const v8::FunctionCallbackInfo<v8::Value> &args,
+                   std::index_sequence<index...>) {
+  v8::Isolate *isolate = args.GetIsolate();
+  auto context = isolate->GetCurrentContext();
   return (obj->*f)(new_cast_to<typename std::tuple_element<index, Tup>::type>(
       args[index], context)...);
 }
 
-template <typename T, typename F, typename Out, typename... Args>
-Out call_from(T* obj, F f, const v8::FunctionCallbackInfo<v8::Value> &args,
-            v8::Local<v8::Context> &context) {
+template <typename T, typename Out, typename... Args>
+Out call_from(T *obj, Out (T::*f)(Args...),
+              const v8::FunctionCallbackInfo<v8::Value> &args) {
   constexpr int N = sizeof...(Args);
   assert(N == args.Length());
   using Seq = std::make_index_sequence<N>;
-  return call_from_impl<T, F, Out, std::tuple<Args...>>(obj, f, args, context, Seq{});
+  return call_from_impl<T, Out (T::*)(Args...), Out, std::tuple<Args...>>(
+      obj, f, args, Seq{});
 }
 
 template <typename T, typename Tup, size_t... index>
@@ -124,19 +144,34 @@ public:
     }
   }
 
+  static T *getObject(const v8::FunctionCallbackInfo<v8::Value> &args) {
+    ObjectHolder<T> *obj = ObjectWrap::Unwrap<ObjectHolder<T>>(args.Holder());
+    return obj->obj_.get();
+  }
+
   template <int N, typename Out, typename... Args>
   static v8::FunctionCallback FunctionWrap(Out (T::*f)(Args...)) {
     auto f_wrapped =
         [f](const v8::FunctionCallbackInfo<v8::Value> &args) -> void {
       v8::Isolate *isolate = args.GetIsolate();
-      auto context = isolate->GetCurrentContext();
 
-      ObjectHolder<T> *obj = ObjectWrap::Unwrap<ObjectHolder<T>>(args.Holder());
-      using F = Out(T::*)(Args...);
-      T* obj_ = obj->obj_.get();
-      
-      const Out &t = detail::call_from<T, F, Out, Args...>(obj_, f, args, context);
+      T *obj = getObject(args);
+
+      const Out &t = detail::call_from<T, Out, Args...>(obj, f, args);
       args.GetReturnValue().Set(detail::new_cast_from<Out>(t, isolate));
+    };
+
+    return detail::fnptr<void(const v8::FunctionCallbackInfo<v8::Value> &), N>(
+        f_wrapped);
+  }
+
+  template <int N, typename... Args>
+  static v8::FunctionCallback FunctionWrap(void (T::*f)(Args...)) {
+    auto f_wrapped =
+        [f](const v8::FunctionCallbackInfo<v8::Value> &args) -> void {
+      T *obj = getObject(args);
+
+      detail::call_from<T, void, Args...>(obj, f, args);
     };
 
     return detail::fnptr<void(const v8::FunctionCallbackInfo<v8::Value> &), N>(
