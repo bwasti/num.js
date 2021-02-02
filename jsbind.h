@@ -1,13 +1,15 @@
-#include <iostream>
 #include <node.h>
 #include <node_object_wrap.h>
+
+#include <iostream>
 #include <type_traits>
 #include <utility>
 
 namespace detail {
 
 // from https://stackoverflow.com/a/45365798
-template <typename Callable> union storage {
+template <typename Callable>
+union storage {
   storage() {}
   std::decay_t<Callable> callable;
 };
@@ -29,7 +31,8 @@ auto fnptr_(Callable &&c, Ret (*)(Args...)) {
   };
 }
 
-template <typename Fn, int N, typename Callable> Fn *fnptr(Callable &&c) {
+template <typename Fn, int N, typename Callable>
+Fn *fnptr(Callable &&c) {
   return fnptr_<N>(std::forward<Callable>(c), (Fn *)nullptr);
 }
 
@@ -39,50 +42,50 @@ T new_cast_to(v8::Local<v8::Value> &&v, v8::Local<v8::Context> &context);
 template <typename T>
 v8::Local<v8::Value> new_cast_from(T v, v8::Isolate *isolate);
 
-#define NUMERIC_TYPE(type, capital_type)                                       \
-  template <>                                                                  \
-  type new_cast_to<type>(v8::Local<v8::Value> && v,                            \
-                         v8::Local<v8::Context> & context) {                   \
-    type out = v->IsUndefined() ? 0 : v->NumberValue(context).FromMaybe(0);    \
-    return out;                                                                \
-  }                                                                            \
-                                                                               \
-  template <>                                                                  \
-  v8::Local<v8::Value> new_cast_from<type>(type v, v8::Isolate * isolate) {    \
-    return v8::Number::New(isolate, v);                                        \
-  }                                                                            \
-                                                                               \
-  template <>                                                                  \
-  std::vector<type> new_cast_to<std::vector<type>>(                            \
-      v8::Local<v8::Value> && v, v8::Local<v8::Context> & context) {           \
-    if (v->Is##capital_type##Array()) {                                        \
-      auto array = v8::capital_type##Array::Cast(*v);                          \
-      auto storage = array->Buffer()->GetBackingStore();                       \
-      auto *data = static_cast<type *>(storage->Data()) +                      \
-                   array->ByteOffset() / sizeof(type);                         \
-      std::vector<type> o(data, data + array->Length());                       \
-      return o;                                                                \
-    }                                                                          \
-    assert(v->IsArray());                                                      \
-    auto array = v8::Array::Cast(*v);                                          \
-    std::vector<type> o(array->Length());                                      \
-    for (uint32_t i = 0; i < array->Length(); ++i) {                           \
-      auto mv = array->Get(context, i);                                        \
-      o[i] = new_cast_to<type>(mv.ToLocalChecked(), context);                  \
-    }                                                                          \
-    return o;                                                                  \
-  }                                                                            \
-                                                                               \
-  template <>                                                                  \
-  v8::Local<v8::Value> new_cast_from<std::vector<type>>(                       \
-      std::vector<type> v, v8::Isolate * isolate) {                            \
-    auto array = v8::capital_type##Array::New(                                 \
-        v8::ArrayBuffer::New(isolate, v.size() * sizeof(type)), 0, v.size());  \
-    auto storage = array->Buffer()->GetBackingStore();                         \
-    auto *data = static_cast<type *>(storage->Data()) +                        \
-                 array->ByteOffset() / sizeof(type);                           \
-    memcpy(data, v.data(), v.size() * sizeof(type));                           \
-    return array;                                                              \
+#define NUMERIC_TYPE(type, capital_type)                                      \
+  template <>                                                                 \
+  type new_cast_to<type>(v8::Local<v8::Value> && v,                           \
+                         v8::Local<v8::Context> & context) {                  \
+    type out = v->IsUndefined() ? 0 : v->NumberValue(context).FromMaybe(0);   \
+    return out;                                                               \
+  }                                                                           \
+                                                                              \
+  template <>                                                                 \
+  v8::Local<v8::Value> new_cast_from<type>(type v, v8::Isolate * isolate) {   \
+    return v8::Number::New(isolate, v);                                       \
+  }                                                                           \
+                                                                              \
+  template <>                                                                 \
+  std::vector<type> new_cast_to<std::vector<type>>(                           \
+      v8::Local<v8::Value> && v, v8::Local<v8::Context> & context) {          \
+    if (v->Is##capital_type##Array()) {                                       \
+      auto array = v8::capital_type##Array::Cast(*v);                         \
+      auto storage = array->Buffer()->GetBackingStore();                      \
+      auto *data = static_cast<type *>(storage->Data()) +                     \
+                   array->ByteOffset() / sizeof(type);                        \
+      std::vector<type> o(data, data + array->Length());                      \
+      return o;                                                               \
+    }                                                                         \
+    assert(v->IsArray());                                                     \
+    auto array = v8::Array::Cast(*v);                                         \
+    std::vector<type> o(array->Length());                                     \
+    for (uint32_t i = 0; i < array->Length(); ++i) {                          \
+      auto mv = array->Get(context, i);                                       \
+      o[i] = new_cast_to<type>(mv.ToLocalChecked(), context);                 \
+    }                                                                         \
+    return o;                                                                 \
+  }                                                                           \
+                                                                              \
+  template <>                                                                 \
+  v8::Local<v8::Value> new_cast_from<std::vector<type>>(                      \
+      std::vector<type> v, v8::Isolate * isolate) {                           \
+    auto array = v8::capital_type##Array::New(                                \
+        v8::ArrayBuffer::New(isolate, v.size() * sizeof(type)), 0, v.size()); \
+    auto storage = array->Buffer()->GetBackingStore();                        \
+    auto *data = static_cast<type *>(storage->Data()) +                       \
+                 array->ByteOffset() / sizeof(type);                          \
+    memcpy(data, v.data(), v.size() * sizeof(type));                          \
+    return array;                                                             \
   }
 
 NUMERIC_TYPE(float, Float32);
@@ -98,7 +101,7 @@ NUMERIC_TYPE(uint32_t, Uint32);
 
 template <typename F, typename Out, typename Tup, size_t... index>
 Out call_from_no_obj_impl(F f, const v8::FunctionCallbackInfo<v8::Value> &args,
-                   std::index_sequence<index...>) {
+                          std::index_sequence<index...>) {
   v8::Isolate *isolate = args.GetIsolate();
   auto context = isolate->GetCurrentContext();
   return f(new_cast_to<typename std::tuple_element<index, Tup>::type>(
@@ -107,11 +110,12 @@ Out call_from_no_obj_impl(F f, const v8::FunctionCallbackInfo<v8::Value> &args,
 
 template <typename Out, typename... Args>
 Out call_from_no_obj(Out (*f)(Args...),
-              const v8::FunctionCallbackInfo<v8::Value> &args) {
+                     const v8::FunctionCallbackInfo<v8::Value> &args) {
   constexpr int N = sizeof...(Args);
   assert(N == args.Length());
   using Seq = std::make_index_sequence<N>;
-  return call_from_no_obj_impl<Out (*)(Args...), Out, std::tuple<Args...>>(f, args, Seq{});
+  return call_from_no_obj_impl<Out (*)(Args...), Out, std::tuple<Args...>>(
+      f, args, Seq{});
 }
 
 template <typename T, typename F, typename Out, typename Tup, size_t... index>
@@ -150,7 +154,7 @@ T *new_from(const v8::FunctionCallbackInfo<v8::Value> &args,
   return new_from_impl<T, std::tuple<Args...>>(args, context, Seq{});
 }
 
-} // namespace detail
+}  // namespace detail
 
 namespace js {
 
@@ -179,8 +183,9 @@ static v8::FunctionCallback FunctionWrap(void (*f)(Args...)) {
       f_wrapped);
 }
 
-template <typename T> class ObjectHolder : public node::ObjectWrap {
-public:
+template <typename T>
+class ObjectHolder : public node::ObjectWrap {
+ public:
   ObjectHolder(T *obj) : obj_(obj) {}
 
   template <typename... Args>
@@ -234,12 +239,13 @@ public:
         f_wrapped);
   }
 
-private:
+ private:
   std::shared_ptr<T> obj_;
 };
 
-template <typename T> class JSObject {
-public:
+template <typename T>
+class JSObject {
+ public:
   JSObject<T>(const JSObject &) = delete;
   JSObject<T>(JSObject &&) = default;
   JSObject<T>() = default;
@@ -269,7 +275,8 @@ public:
     return jso;
   }
 
-  template <typename F, int N> void def(std::string name, F f) {
+  template <typename F, int N>
+  void def(std::string name, F f) {
     NODE_SET_PROTOTYPE_METHOD(tpl, name.c_str(),
                               ObjectHolder<T>::template FunctionWrap<N>(f));
   }
@@ -287,7 +294,7 @@ public:
         .FromJust();
   }
 
-private:
+ private:
   std::string class_name;
   v8::Local<v8::Object> exports;
   v8::Local<v8::FunctionTemplate> tpl;
@@ -297,18 +304,20 @@ private:
 };
 
 class MethodHolder {
-public:
+ public:
   MethodHolder(v8::Local<v8::Object> e) : exports(e) {}
 
-  template <typename F, int N> void def(std::string name, F f) {
+  template <typename F, int N>
+  void def(std::string name, F f) {
     NODE_SET_METHOD(exports, name.c_str(), FunctionWrap<N>(f));
   }
-private:
+
+ private:
   v8::Local<v8::Object> exports;
-  
 };
 
-template <typename T, int C> struct CountedType {
+template <typename T, int C>
+struct CountedType {
   CountedType(const CountedType &) = delete;
   CountedType(CountedType &&o) : underlying_(std::move(o.underlying_)) {}
   CountedType(std::shared_ptr<T> u) : underlying_(std::move(u)){};
@@ -317,7 +326,8 @@ template <typename T, int C> struct CountedType {
 
   std::shared_ptr<T> underlying_;
 
-  template <typename F> CountedType<T, C + 1> def(std::string name, F f) {
+  template <typename F>
+  CountedType<T, C + 1> def(std::string name, F f) {
     underlying_->template def<F, C>(name, f);
     return CountedType<T, C + 1>(std::move(*this));
   }
@@ -334,4 +344,4 @@ CountedType<MethodHolder, 0> methods(v8::Local<v8::Object> exports) {
   return CountedType<MethodHolder, 0>(std::make_shared<MethodHolder>(exports));
 }
 
-} // namespace js
+}  // namespace js
