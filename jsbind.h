@@ -10,6 +10,7 @@ template <typename> void type_id() {}
 
 using type_id_t = void (*)();
 
+// from https://stackoverflow.com/a/45365798
 template <typename Callable> union storage {
   storage() {}
   std::decay_t<Callable> callable;
@@ -21,8 +22,9 @@ auto fnptr_(Callable &&c, Ret (*)(Args...)) {
   static storage<Callable> s;
   using type = decltype(s.callable);
 
-  if (used)
+  if (used) {
     s.callable.~type();
+  }
   new (&s.callable) type(std::forward<Callable>(c));
   used = true;
 
@@ -41,7 +43,7 @@ T new_cast_to(v8::Local<v8::Value> &&v, v8::Local<v8::Context> &context);
 template <typename T>
 v8::Local<v8::Value> new_cast_from(T v, v8::Isolate *isolate);
 
-#define NUMERIC_TYPE(type)                                                     \
+#define NUMERIC_TYPE(type, capital_type)                                       \
   template <>                                                                  \
   type new_cast_to<type>(v8::Local<v8::Value> && v,                            \
                          v8::Local<v8::Context> & context) {                   \
@@ -52,36 +54,42 @@ v8::Local<v8::Value> new_cast_from(T v, v8::Isolate *isolate);
   template <>                                                                  \
   v8::Local<v8::Value> new_cast_from<type>(type v, v8::Isolate * isolate) {    \
     return v8::Number::New(isolate, v);                                        \
+  }                                                                            \
+                                                                               \
+  template <>                                                                  \
+  std::vector<type> new_cast_to<std::vector<type>>(                            \
+      v8::Local<v8::Value> && v, v8::Local<v8::Context> & context) {           \
+    assert(v->Is##capital_type##Array());                                      \
+    auto array = v8::capital_type##Array::Cast(*v);                            \
+    auto storage = array->Buffer()->GetBackingStore();                         \
+    auto *data = static_cast<type *>(storage->Data()) +                        \
+                 array->ByteOffset() / sizeof(type);                           \
+    std::vector<type> o(data, data + array->Length());                         \
+    return o;                                                                  \
+  }                                                                            \
+                                                                               \
+  template <>                                                                  \
+  v8::Local<v8::Value> new_cast_from<std::vector<type>>(                       \
+      std::vector<type> v, v8::Isolate * isolate) {                            \
+    auto array = v8::capital_type##Array::New(                                 \
+        v8::ArrayBuffer::New(isolate, v.size() * sizeof(type)), 0, v.size());  \
+    auto storage = array->Buffer()->GetBackingStore();                         \
+    auto *data = static_cast<type *>(storage->Data()) +                        \
+                 array->ByteOffset() / sizeof(type);                           \
+    memcpy(data, v.data(), v.size() * sizeof(type));                           \
+    return array;                                                              \
   }
 
-NUMERIC_TYPE(double);
-NUMERIC_TYPE(float);
-NUMERIC_TYPE(int);
+NUMERIC_TYPE(float, Float32);
+NUMERIC_TYPE(double, Float64);
 
-template <>
-std::vector<float>
-new_cast_to<std::vector<float>>(v8::Local<v8::Value> &&v,
-                                v8::Local<v8::Context> &context) {
-  assert(v->IsFloat32Array());
-  auto array = v8::Float32Array::Cast(*v);
-  auto storage = array->Buffer()->GetBackingStore();
-  auto *data = static_cast<float *>(storage->Data()) +
-               array->ByteOffset() / sizeof(float);
-  std::vector<float> o(data, data + array->Length());
-  return o;
-}
+NUMERIC_TYPE(int8_t, Int8);
+NUMERIC_TYPE(int16_t, Int16);
+NUMERIC_TYPE(int32_t, Int32);
 
-template <>
-v8::Local<v8::Value> new_cast_from<std::vector<float>>(std::vector<float> v,
-                                                       v8::Isolate *isolate) {
-  auto array = v8::Float32Array::New(
-      v8::ArrayBuffer::New(isolate, v.size() * sizeof(float)), 0, v.size());
-  auto storage = array->Buffer()->GetBackingStore();
-  auto *data = static_cast<float *>(storage->Data()) +
-               array->ByteOffset() / sizeof(float);
-  memcpy(data, v.data(), v.size() * sizeof(float));
-  return array;
-}
+NUMERIC_TYPE(uint8_t, Uint8);
+NUMERIC_TYPE(uint16_t, Uint16);
+NUMERIC_TYPE(uint32_t, Uint32);
 
 template <typename T, typename F, typename Out, typename Tup, size_t... index>
 Out call_from_impl(T *obj, F f, const v8::FunctionCallbackInfo<v8::Value> &args,
