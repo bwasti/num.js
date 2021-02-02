@@ -55,12 +55,21 @@ v8::Local<v8::Value> new_cast_from(T v, v8::Isolate *isolate);
   template <>                                                                  \
   std::vector<type> new_cast_to<std::vector<type>>(                            \
       v8::Local<v8::Value> && v, v8::Local<v8::Context> & context) {           \
-    assert(v->Is##capital_type##Array());                                      \
-    auto array = v8::capital_type##Array::Cast(*v);                            \
-    auto storage = array->Buffer()->GetBackingStore();                         \
-    auto *data = static_cast<type *>(storage->Data()) +                        \
-                 array->ByteOffset() / sizeof(type);                           \
-    std::vector<type> o(data, data + array->Length());                         \
+    if (v->Is##capital_type##Array()) {                                        \
+      auto array = v8::capital_type##Array::Cast(*v);                          \
+      auto storage = array->Buffer()->GetBackingStore();                       \
+      auto *data = static_cast<type *>(storage->Data()) +                      \
+                   array->ByteOffset() / sizeof(type);                         \
+      std::vector<type> o(data, data + array->Length());                       \
+      return o;                                                                \
+    }                                                                          \
+    assert(v->IsArray());                                                      \
+    auto array = v8::Array::Cast(*v);                                          \
+    std::vector<type> o(array->Length());                                      \
+    for (uint32_t i = 0; i < array->Length(); ++i) {                           \
+      auto mv = array->Get(context, i);                                        \
+      o[i] = new_cast_to<type>(mv.ToLocalChecked(), context);                  \
+    }                                                                          \
     return o;                                                                  \
   }                                                                            \
                                                                                \
@@ -86,6 +95,24 @@ NUMERIC_TYPE(int32_t, Int32);
 NUMERIC_TYPE(uint8_t, Uint8);
 NUMERIC_TYPE(uint16_t, Uint16);
 NUMERIC_TYPE(uint32_t, Uint32);
+
+template <typename F, typename Out, typename Tup, size_t... index>
+Out call_from_no_obj_impl(F f, const v8::FunctionCallbackInfo<v8::Value> &args,
+                   std::index_sequence<index...>) {
+  v8::Isolate *isolate = args.GetIsolate();
+  auto context = isolate->GetCurrentContext();
+  return f(new_cast_to<typename std::tuple_element<index, Tup>::type>(
+      args[index], context)...);
+}
+
+template <typename Out, typename... Args>
+Out call_from_no_obj(Out (*f)(Args...),
+              const v8::FunctionCallbackInfo<v8::Value> &args) {
+  constexpr int N = sizeof...(Args);
+  assert(N == args.Length());
+  using Seq = std::make_index_sequence<N>;
+  return call_from_no_obj_impl<Out (*)(Args...), Out, std::tuple<Args...>>(f, args, Seq{});
+}
 
 template <typename T, typename F, typename Out, typename Tup, size_t... index>
 Out call_from_impl(T *obj, F f, const v8::FunctionCallbackInfo<v8::Value> &args,
@@ -127,6 +154,31 @@ T *new_from(const v8::FunctionCallbackInfo<v8::Value> &args,
 
 namespace js {
 
+template <int N, typename Out, typename... Args>
+static v8::FunctionCallback FunctionWrap(Out (*f)(Args...)) {
+  auto f_wrapped =
+      [f](const v8::FunctionCallbackInfo<v8::Value> &args) -> void {
+    v8::Isolate *isolate = args.GetIsolate();
+
+    const Out &t = detail::call_from_no_obj<Out, Args...>(f, args);
+    args.GetReturnValue().Set(detail::new_cast_from<Out>(t, isolate));
+  };
+
+  return detail::fnptr<void(const v8::FunctionCallbackInfo<v8::Value> &), N>(
+      f_wrapped);
+}
+
+template <int N, typename... Args>
+static v8::FunctionCallback FunctionWrap(void (*f)(Args...)) {
+  auto f_wrapped =
+      [f](const v8::FunctionCallbackInfo<v8::Value> &args) -> void {
+    detail::call_from_no_obj<void, Args...>(f, args);
+  };
+
+  return detail::fnptr<void(const v8::FunctionCallbackInfo<v8::Value> &), N>(
+      f_wrapped);
+}
+
 template <typename T> class ObjectHolder : public node::ObjectWrap {
 public:
   ObjectHolder(T *obj) : obj_(obj) {}
@@ -143,7 +195,7 @@ public:
       args.GetReturnValue().Set(args.This());
     } else {
       isolate->ThrowException(v8::Exception::TypeError(
-          v8::String::NewFromUtf8(isolate, "Must be called with `new`")
+          v8::String::NewFromUtf8(isolate, "Must be called with 'new'")
               .ToLocalChecked()));
     }
   }
@@ -244,6 +296,18 @@ private:
   v8::Local<v8::Object> addon_data;
 };
 
+class MethodHolder {
+public:
+  MethodHolder(v8::Local<v8::Object> e) : exports(e) {}
+
+  template <typename F, int N> void def(std::string name, F f) {
+    NODE_SET_METHOD(exports, name.c_str(), FunctionWrap<N>(f));
+  }
+private:
+  v8::Local<v8::Object> exports;
+  
+};
+
 template <typename T, int C> struct CountedType {
   CountedType(const CountedType &) = delete;
   CountedType(CountedType &&o) : underlying_(std::move(o.underlying_)) {}
@@ -264,6 +328,10 @@ CountedType<JSObject<T>, 0> class_(v8::Local<v8::Object> exports,
                                    std::string name) {
   auto js = JSObject<T>::template Create<Args...>(exports, name);
   return CountedType<JSObject<T>, 0>(js);
+}
+
+CountedType<MethodHolder, 0> methods(v8::Local<v8::Object> exports) {
+  return CountedType<MethodHolder, 0>(std::make_shared<MethodHolder>(exports));
 }
 
 } // namespace js

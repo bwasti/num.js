@@ -17,13 +17,39 @@ for (let i = 0; i < l.length; ++i) {
 console.log(obj.sum(l));
 console.log(obj.array());
 
-const iters = 100000000;
-for (let i = 0; i < iters / 100; ++i) {
-  obj.getProd();
+function benchmark(f) {
+  const it0 = performance.now();
+  for (let i = 0; i < 10; ++i) {
+    f();
+  }
+  const it1 = performance.now();
+  const iters = 1e6 / Math.max((it1 - it0), 1e-9);
+ 
+  // warmup 
+  for (let i = 0; i < iters / 100; ++i) {
+    f();
+  }
+  const t0 = performance.now();
+  for (let i = 0; i < iters; ++i) {
+    f();
+  }
+  const t1 = performance.now();
+  console.log(1e6 * (t1 - t0) / iters, "nanoseconds per iter");
 }
-const t0 = performance.now();
-for (let i = 0; i < iters; ++i) {
+
+benchmark(function() {
   obj.getProd();
-}
-const t1 = performance.now();
-console.log(1e6 * (t1 - t0) / iters, "nanoseconds per iter");
+});
+
+benchmark(function() {
+  const t = new addon.Tensor([1,2]);
+});
+
+const t = new addon.Tensor([1,2]);
+benchmark(function() {
+  const s = t.sum();
+});
+
+// Not yet supported
+//let tensor = addon.randn();
+
